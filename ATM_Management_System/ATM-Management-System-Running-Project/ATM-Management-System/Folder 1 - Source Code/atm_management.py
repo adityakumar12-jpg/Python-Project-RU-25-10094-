@@ -1,0 +1,250 @@
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+DATA_FILE = Path(__file__).resolve().parent / "atm.txt"
+DEFAULT_PIN = "1234"
+DEFAULT_BALANCE = Decimal("10000.00")
+MAX_PIN_ATTEMPTS = 3
+MAX_STATEMENT_ITEMS = 5
+
+
+def money(value: Decimal) -> str:
+    """Format an amount as Indian rupees."""
+    return f"₹{value:,.2f}"
+
+
+def create_default_data() -> None:
+    """Create the initial account file if it does not exist."""
+    if not DATA_FILE.exists():
+        save_data(DEFAULT_PIN, DEFAULT_BALANCE, [])
+
+
+def load_data():
+    """Read PIN, balance and transaction history from atm.txt."""
+    create_default_data()
+
+    pin = None
+    balance = None
+    transactions = []
+
+    try:
+        with DATA_FILE.open("r", encoding="utf-8") as file:
+            for raw_line in file:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                if line.startswith("PIN="):
+                    pin = line.split("=", 1)[1].strip()
+                elif line.startswith("BALANCE="):
+                    balance = Decimal(line.split("=", 1)[1].strip())
+                elif line.startswith("TXN="):
+                    # Format: timestamp|type|amount|balance_after
+                    parts = line.split("=", 1)[1].split("|")
+                    if len(parts) == 4:
+                        transactions.append({
+                            "time": parts[0],
+                            "type": parts[1],
+                            "amount": Decimal(parts[2]),
+                            "balance": Decimal(parts[3]),
+                        })
+
+        if not pin or balance is None or balance < 0:
+            raise ValueError("Required PIN or BALANCE data is missing or invalid.")
+
+        return pin, balance, transactions
+
+    except (OSError, InvalidOperation, ValueError) as error:
+        raise RuntimeError(
+            f"Could not read {DATA_FILE.name}: {error}\n"
+            "Please restore the file to the default format shown in README.md."
+        ) from error
+
+
+def save_data(pin: str, balance: Decimal, transactions: list) -> None:
+    """Save account details and transactions to atm.txt."""
+    try:
+        with DATA_FILE.open("w", encoding="utf-8") as file:
+            file.write("# ATM Management System data file\n")
+            file.write(f"PIN={pin}\n")
+            file.write(f"BALANCE={balance:.2f}\n")
+            for item in transactions:
+                file.write(
+                    "TXN="
+                    f"{item['time']}|{item['type']}|"
+                    f"{item['amount']:.2f}|{item['balance']:.2f}\n"
+                )
+    except OSError as error:
+        raise RuntimeError(f"Unable to save account data: {error}") from error
+
+
+def verify_pin(correct_pin: str) -> bool:
+    """Allow a maximum of three PIN attempts."""
+    print("\n========== ATM LOGIN ==========")
+    for attempt in range(1, MAX_PIN_ATTEMPTS + 1):
+        entered_pin = input("Enter your 4-digit PIN: ").strip()
+
+        if entered_pin == correct_pin:
+            print("\nLogin successful!")
+            return True
+
+        attempts_left = MAX_PIN_ATTEMPTS - attempt
+        if attempts_left > 0:
+            print(f"Invalid PIN. Attempts left: {attempts_left}")
+        else:
+            print("Invalid PIN.")
+            print("Account locked. Exiting...")
+
+    return False
+
+
+def check_balance(balance: Decimal) -> None:
+    """Display the current balance."""
+    print("\n------ ACCOUNT BALANCE ------")
+    print(f"Available Balance: {money(balance)}")
+
+
+def read_amount() -> Decimal | None:
+    """Read and validate a positive numeric amount."""
+    raw_amount = input("Enter amount: ").strip()
+
+    try:
+        amount = Decimal(raw_amount)
+    except InvalidOperation:
+        print("Invalid amount. Please enter numbers only.")
+        return None
+
+    if not amount.is_finite():
+        print("Invalid amount. Please enter a valid number.")
+        return None
+
+    if amount <= 0:
+        print("Invalid amount. Amount must be greater than zero.")
+        return None
+
+    # ATM simulation accepts up to two decimal places.
+    if amount != amount.quantize(Decimal("0.01")):
+        print("Invalid amount. Please enter maximum two decimal places.")
+        return None
+
+    return amount
+
+
+def record_transaction(transactions: list, transaction_type: str,
+                       amount: Decimal, balance: Decimal) -> None:
+    """Add a transaction to the in-memory statement."""
+    transactions.append({
+        "time": datetime.now().strftime("%d-%m-%Y %I:%M:%S %p"),
+        "type": transaction_type,
+        "amount": amount,
+        "balance": balance,
+    })
+
+
+def deposit(pin: str, balance: Decimal, transactions: list) -> Decimal:
+    """Deposit money into the account."""
+    print("\n------ CASH DEPOSIT ------")
+    amount = read_amount()
+    if amount is None:
+        return balance
+
+    balance += amount
+    record_transaction(transactions, "DEPOSIT", amount, balance)
+    save_data(pin, balance, transactions)
+    print("Deposit successful.")
+    print(f"New Balance: {money(balance)}")
+    return balance
+
+
+def withdraw(pin: str, balance: Decimal, transactions: list) -> Decimal:
+    """Withdraw money if the account has sufficient balance."""
+    print("\n------ CASH WITHDRAWAL ------")
+    amount = read_amount()
+    if amount is None:
+        return balance
+
+    if amount > balance:
+        print("Insufficient balance.")
+        print(f"Available Balance: {money(balance)}")
+        return balance
+
+    balance -= amount
+    record_transaction(transactions, "WITHDRAWAL", amount, balance)
+    save_data(pin, balance, transactions)
+    print("Withdrawal successful.")
+    print(f"New Balance: {money(balance)}")
+    return balance
+
+
+def mini_statement(transactions: list, balance: Decimal) -> None:
+    """Display the five most recent transactions."""
+    print("\n========== MINI STATEMENT ==========")
+    if not transactions:
+        print("No transactions available.")
+    else:
+        print(f"{'DATE & TIME':<24} {'TYPE':<12} {'AMOUNT':>13} {'BALANCE':>13}")
+        print("-" * 68)
+        for item in reversed(transactions[-MAX_STATEMENT_ITEMS:]):
+            print(
+                f"{item['time']:<24} {item['type']:<12} "
+                f"{money(item['amount']):>13} {money(item['balance']):>13}"
+            )
+    print("-" * 68)
+    print(f"Current Balance: {money(balance)}")
+
+
+def show_menu() -> None:
+    """Display the ATM main menu."""
+    print("\n========== ATM MAIN MENU ==========")
+    print("1. Check Balance")
+    print("2. Deposit")
+    print("3. Withdraw")
+    print("4. Mini Statement")
+    print("5. Exit")
+    print("===================================")
+
+
+def main() -> None:
+    """Run the ATM application."""
+    print("=" * 42)
+    print("          ATM MANAGEMENT SYSTEM")
+    print("=" * 42)
+
+    try:
+        pin, balance, transactions = load_data()
+    except RuntimeError as error:
+        print(f"\nDATA FILE ERROR: {error}")
+        return
+
+    if not verify_pin(pin):
+        return
+
+    while True:
+        show_menu()
+        choice = input("Enter your choice (1-5): ").strip()
+
+        try:
+            if choice == "1":
+                check_balance(balance)
+            elif choice == "2":
+                balance = deposit(pin, balance, transactions)
+            elif choice == "3":
+                balance = withdraw(pin, balance, transactions)
+            elif choice == "4":
+                mini_statement(transactions, balance)
+            elif choice == "5":
+                save_data(pin, balance, transactions)
+                print("\nThank you for using ATM Management System.")
+                print("Please collect your card. Goodbye!")
+                break
+            else:
+                print("Invalid choice. Please select an option from 1 to 5.")
+        except RuntimeError as error:
+            print(f"\nFILE ERROR: {error}")
+            print("The application will close to protect account data.")
+            break
+
+
+if __name__ == "__main__":
+    main()
